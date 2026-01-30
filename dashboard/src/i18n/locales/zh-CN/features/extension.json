@@ -40,6 +40,61 @@
     "updateAll": "更新全部插件",
     "deleteSource": "删除源"
   },
+  "collection": {
+    "buttons": {
+      "export": "导出插件合集",
+      "import": "导入插件合集",
+      "confirmImport": "确认导入"
+    },
+    "dialogs": {
+      "export": {
+        "title": "导出插件合集"
+      },
+      "import": {
+        "title": "导入插件合集"
+      },
+      "result": {
+        "title": "导入结果"
+      }
+    },
+    "fields": {
+      "name": "合集名称",
+      "description": "描述（可选）",
+      "includeConfigs": "包含配置",
+      "includePriority": "包含优先级",
+      "importMode": "导入模式",
+      "applyConfigs": "应用配置",
+      "overwriteExistingConfigs": "覆盖已有配置",
+      "applyPriority": "应用优先级",
+      "unnamed": "未命名合集"
+    },
+    "labels": {
+      "pluginCount": "插件数量：{count}"
+    },
+    "importModes": {
+      "add": "追加（add）",
+      "clean": "清理后导入（clean）"
+    },
+    "messages": {
+      "nameRequired": "请填写合集名称",
+      "exportSuccess": "导出成功，已开始下载",
+      "exportFailed": "导出失败",
+      "invalidJson": "JSON 格式错误",
+      "validateFailed": "验证失败",
+      "readFailed": "读取文件失败",
+      "fileTooLarge": "文件过大（上限 10MB）",
+      "importFailed": "导入失败",
+      "importFinished": "导入已完成"
+    },
+    "result": {
+      "installed": "已安装：{count}",
+      "failed": "失败：{count}",
+      "skipped": "跳过：{count}",
+      "uninstalled": "已卸载：{count}",
+      "configsApplied": "已应用配置：{count}",
+      "priorityApplied": "已应用优先级：{count}"
+    }
+  },
   "status": {
     "enabled": "启用",
     "disabled": "禁用",

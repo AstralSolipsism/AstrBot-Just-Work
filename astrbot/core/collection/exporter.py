@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from astrbot.core import logger
 from astrbot.core.config.default import VERSION
 from astrbot.core.star.star_manager import PluginManager
 
@@ -57,7 +58,11 @@ class CollectionExporter:
                     continue
                 try:
                     cfg_dict = dict(cfg)
-                except Exception:
+                except Exception as e:
+                    # Log the exception to help diagnose config conversion issues
+                    logger.warning(
+                        f"Failed to convert config for plugin {plugin.name}: {e}"
+                    )
                     cfg_dict = {}
 
                 # Some plugins may have a missing/None name in edge cases; avoid using None as dict key.

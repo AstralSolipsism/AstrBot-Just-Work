@@ -44,12 +44,54 @@ class CollectionRoute(Route):
         self.importer = CollectionImporter(plugin_manager)
 
         self.routes = {
-            "/plugin/collection/export": ("POST", self.export_collection),
+            # Backward/compat: some deployments may block POST on this endpoint.
+            # Provide a GET variant so the WebUI can export collections reliably.
+            "/plugin/collection/export": [
+                ("POST", self.export_collection),
+                ("GET", self.export_collection_get),
+            ],
             "/plugin/collection/import": ("POST", self.import_collection),
             "/plugin/collection/preview": ("POST", self.preview_collection),
             "/plugin/collection/validate": ("POST", self.validate_collection),
         }
         self.register_routes()
+
+    async def export_collection_get(self):
+        if DEMO_MODE:
+            return (
+                Response()
+                .error("You are not permitted to do this operation in demo mode")
+                .__dict__
+            )
+
+        name = str(request.args.get("name") or "").strip()
+        if not name:
+            return Response().error("name is required").__dict__
+
+        options = ExportOptions(
+            name=name,
+            description=str(request.args.get("description") or ""),
+            author=str(request.args.get("author") or ""),
+            version=str(request.args.get("version") or "1.0.0"),
+            include_configs=str(request.args.get("include_configs", "true")).lower()
+            not in {"0", "false", "no"},
+            include_priority=str(request.args.get("include_priority", "true")).lower()
+            not in {"0", "false", "no"},
+            exclude_plugins=(
+                request.args.getlist("exclude_plugins")
+                if request.args.getlist("exclude_plugins")
+                else None
+            ),
+        )
+
+        try:
+            payload = await self.exporter.export(options)
+            return Response().ok(payload).__dict__
+        except Exception as e:
+            logger.error(
+                f"/api/plugin/collection/export(GET): {traceback.format_exc()}"
+            )
+            return Response().error(str(e)).__dict__
 
     async def export_collection(self):
         if DEMO_MODE:

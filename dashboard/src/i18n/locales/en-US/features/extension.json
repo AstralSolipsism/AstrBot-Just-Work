@@ -40,6 +40,61 @@
     "updateAll": "Update All",
     "deleteSource": "Delete Source"
   },
+  "collection": {
+    "buttons": {
+      "export": "Export Collection",
+      "import": "Import Collection",
+      "confirmImport": "Confirm Import"
+    },
+    "dialogs": {
+      "export": {
+        "title": "Export Collection"
+      },
+      "import": {
+        "title": "Import Collection"
+      },
+      "result": {
+        "title": "Import Result"
+      }
+    },
+    "fields": {
+      "name": "Collection Name",
+      "description": "Description (optional)",
+      "includeConfigs": "Include configs",
+      "includePriority": "Include priority",
+      "importMode": "Import mode",
+      "applyConfigs": "Apply configs",
+      "overwriteExistingConfigs": "Overwrite existing configs",
+      "applyPriority": "Apply priority",
+      "unnamed": "Unnamed collection"
+    },
+    "labels": {
+      "pluginCount": "Plugins: {count}"
+    },
+    "importModes": {
+      "add": "Add (add)",
+      "clean": "Clean then import (clean)"
+    },
+    "messages": {
+      "nameRequired": "Please enter a collection name",
+      "exportSuccess": "Exported. Download started.",
+      "exportFailed": "Export failed",
+      "invalidJson": "Invalid JSON",
+      "validateFailed": "Validation failed",
+      "readFailed": "Failed to read file",
+      "fileTooLarge": "File too large (max 10MB)",
+      "importFailed": "Import failed",
+      "importFinished": "Import finished"
+    },
+    "result": {
+      "installed": "Installed: {count}",
+      "failed": "Failed: {count}",
+      "skipped": "Skipped: {count}",
+      "uninstalled": "Uninstalled: {count}",
+      "configsApplied": "Configs applied: {count}",
+      "priorityApplied": "Priority applied: {count}"
+    }
+  },
   "status": {
     "enabled": "Enabled",
     "disabled": "Disabled",

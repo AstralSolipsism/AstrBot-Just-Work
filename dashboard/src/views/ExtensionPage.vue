@@ -22,6 +22,13 @@ const { t } = useI18n();
 const { tm } = useModuleI18n("features/extension");
 const router = useRouter();
 
+const getSelectedGitHubProxy = () => {
+  if (typeof window === "undefined" || !window.localStorage) return "";
+  return localStorage.getItem("githubProxyRadioValue") === "1"
+    ? localStorage.getItem("selectedGitHubProxy") || ""
+    : "";
+};
+
 // 检查指令冲突并提示
 const conflictDialog = reactive({
   show: false,
@@ -150,6 +157,230 @@ const debouncedMarketSearch = ref("");
 const refreshingMarket = ref(false);
 const sortBy = ref("default"); // default, stars, author, updated
 const sortOrder = ref("desc"); // desc (降序) or asc (升序)
+
+// Plugin collection import/export
+const collectionExportDialog = reactive({
+  show: false,
+  name: "",
+  description: "",
+  includeConfigs: true,
+  includePriority: true,
+  loading: false,
+});
+
+const collectionImport = reactive({
+  validating: false,
+  importing: false,
+  rawText: "",
+  validatedCollection: null,
+  showConfirm: false,
+  mode: "add",
+  applyConfigs: true,
+  overwriteExistingConfigs: false,
+  applyPriority: true,
+  proxy: "",
+  result: null,
+  showResult: false,
+});
+
+const collectionFileInput = ref(null);
+
+const safeFileName = (name) =>
+  (name || "collection")
+    .toString()
+    .trim()
+    .replace(/[\\/:*?"<>|\n\r\t]+/g, "_")
+    .slice(0, 120);
+
+const downloadJson = (filename, data) => {
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+
+  // Some environments (or browser settings) may block programmatic downloads.
+  // Fallback to opening a new tab so user can save manually.
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch (e) {
+    window.open(url, "_blank");
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+};
+
+const openExportCollectionDialog = () => {
+  collectionExportDialog.name = "";
+  collectionExportDialog.description = "";
+  collectionExportDialog.includeConfigs = true;
+  collectionExportDialog.includePriority = true;
+  collectionExportDialog.loading = false;
+  collectionExportDialog.show = true;
+};
+
+const exportCollection = async () => {
+  const name = (collectionExportDialog.name || "").trim();
+  if (!name) {
+    toast(tm("collection.messages.nameRequired"), "error");
+    return;
+  }
+
+  collectionExportDialog.loading = true;
+  try {
+    const res = await axios.get("/api/plugin/collection/export", {
+        params: {
+          name,
+          description: collectionExportDialog.description || undefined,
+          include_configs: collectionExportDialog.includeConfigs,
+          include_priority: collectionExportDialog.includePriority,
+        },
+      });
+
+    if (res.data.status === "error") {
+      toast(res.data.message || tm("collection.messages.exportFailed"), "error");
+      return;
+    }
+
+    const collection = res.data.data;
+    downloadJson(`${safeFileName(name)}.json`, collection);
+    toast(tm("collection.messages.exportSuccess"), "success");
+    collectionExportDialog.show = false;
+  } catch (err) {
+    const errorMsg = err.response?.data?.message || err.message || String(err);
+    toast(`${tm("collection.messages.exportFailed")}: ${errorMsg}`, "error");
+  } finally {
+    collectionExportDialog.loading = false;
+  }
+};
+
+const openImportFilePicker = () => {
+  if (!collectionFileInput.value) return;
+  collectionFileInput.value.value = null;
+  collectionFileInput.value.click();
+};
+
+const readSelectedCollectionFile = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("read failed"));
+    reader.readAsText(file);
+  });
+};
+
+const validateAndPreviewCollection = async (rawText) => {
+  collectionImport.validating = true;
+  collectionImport.rawText = rawText;
+  collectionImport.validatedCollection = null;
+  collectionImport.showConfirm = false;
+  collectionImport.result = null;
+  collectionImport.showResult = false;
+
+  let collectionObj;
+  try {
+    collectionObj = JSON.parse(rawText);
+  } catch (e) {
+    toast(tm("collection.messages.invalidJson"), "error");
+    collectionImport.validating = false;
+    return;
+  }
+
+  try {
+    const res = await axios.post("/api/plugin/collection/validate", {
+      collection: collectionObj,
+    });
+
+    if (res.data.status === "error") {
+      toast(res.data.message || tm("collection.messages.validateFailed"), "error");
+      return;
+    }
+
+    const validated = res.data.data || collectionObj;
+    collectionImport.validatedCollection = validated;
+    collectionImport.mode = "add";
+    collectionImport.applyConfigs = true;
+    collectionImport.overwriteExistingConfigs = false;
+    collectionImport.applyPriority = true;
+    collectionImport.proxy = localStorage.getItem("selectedGitHubProxy") || "";
+    collectionImport.showConfirm = true;
+  } catch (err) {
+    const errorMsg = err.response?.data?.message || err.message || String(err);
+    toast(`${tm("collection.messages.validateFailed")}: ${errorMsg}`, "error");
+  } finally {
+    collectionImport.validating = false;
+  }
+};
+
+const onCollectionFileSelected = async (e) => {
+  const file = e?.target?.files?.[0];
+  if (!file) return;
+
+  if (file.size > 10 * 1024 * 1024) {
+    toast(tm("collection.messages.fileTooLarge"), "error");
+    return;
+  }
+
+  try {
+    const text = await readSelectedCollectionFile(file);
+    await validateAndPreviewCollection(text);
+  } catch (err) {
+    const errorMsg = err?.message || String(err);
+    toast(`${tm("collection.messages.readFailed")}: ${errorMsg}`, "error");
+  }
+};
+
+const getCollectionPluginCount = (collection) => {
+  if (!collection) return 0;
+  const plugins = collection.plugins || collection.items || [];
+  if (Array.isArray(plugins)) return plugins.length;
+  if (typeof plugins === "object" && plugins) return Object.keys(plugins).length;
+  return 0;
+};
+
+const confirmImportCollection = async () => {
+  if (!collectionImport.validatedCollection) return;
+
+  collectionImport.importing = true;
+  try {
+    const payload = {
+      collection: collectionImport.validatedCollection,
+      import_mode: collectionImport.mode,
+      apply_configs: collectionImport.applyConfigs,
+      overwrite_existing_configs: collectionImport.overwriteExistingConfigs,
+      apply_priority: collectionImport.applyPriority,
+      proxy: collectionImport.proxy || undefined,
+    };
+
+    const res = await axios.post("/api/plugin/collection/import", payload);
+    if (res.data.status === "error") {
+      toast(res.data.message || tm("collection.messages.importFailed"), "error");
+      return;
+    }
+
+    collectionImport.result = res.data.data;
+    collectionImport.showConfirm = false;
+    collectionImport.showResult = true;
+
+    toast(tm("collection.messages.importFinished"), "success");
+
+    try {
+      await getExtensions();
+      await checkAndPromptConflicts();
+    } catch (e) {
+      // Ignore refresh errors
+    }
+  } catch (err) {
+    const errorMsg = err.response?.data?.message || err.message || String(err);
+    toast(`${tm("collection.messages.importFailed")}: ${errorMsg}`, "error");
+  } finally {
+    collectionImport.importing = false;
+  }
+};
 
 // 插件市场拼音搜索
 const normalizeStr = (s) => (s ?? "").toString().toLowerCase().trim();
@@ -299,7 +530,8 @@ const paginatedPlugins = computed(() => {
 });
 
 const updatableExtensions = computed(() => {
-  return extension_data?.data?.filter((ext) => ext.has_update) || [];
+  const data = Array.isArray(extension_data?.data) ? extension_data.data : [];
+  return data.filter((ext) => ext.has_update);
 });
 
 // 方法
@@ -430,7 +662,8 @@ const handleUninstallConfirm = (options) => {
 
 const updateExtension = async (extension_name, forceUpdate = false) => {
   // 查找插件信息
-  const ext = extension_data.data?.find((e) => e.name === extension_name);
+  const data = Array.isArray(extension_data?.data) ? extension_data.data : [];
+  const ext = data.find((e) => e.name === extension_name);
 
   // 如果没有检测到更新且不是强制更新，则弹窗确认
   if (!ext?.has_update && !forceUpdate) {
@@ -444,7 +677,7 @@ const updateExtension = async (extension_name, forceUpdate = false) => {
   try {
     const res = await axios.post("/api/plugin/update", {
       name: extension_name,
-      proxy: localStorage.getItem("selectedGitHubProxy") || "",
+      proxy: getSelectedGitHubProxy(),
     });
 
     if (res.data.status === "error") {
@@ -513,7 +746,7 @@ const updateAllExtensions = async () => {
   try {
     const res = await axios.post("/api/plugin/update-all", {
       names: targets,
-      proxy: localStorage.getItem("selectedGitHubProxy") || "",
+      proxy: getSelectedGitHubProxy(),
     });
 
     if (res.data.status === "error") {
@@ -932,7 +1165,7 @@ const newExtension = async () => {
     axios
       .post("/api/plugin/install", {
         url: extension_url.value,
-        proxy: localStorage.getItem("selectedGitHubProxy") || "",
+        proxy: getSelectedGitHubProxy(),
       })
       .then(async (res) => {
         loading_.value = false;
@@ -1147,6 +1380,26 @@ watch(isListView, (newVal) => {
                       ? tm("buttons.hideSystemPlugins")
                       : tm("buttons.showSystemPlugins")
                   }}
+                </v-btn>
+
+                <v-btn
+                  class="ml-2"
+                  color="primary"
+                  variant="tonal"
+                  @click="openExportCollectionDialog"
+                >
+                  <v-icon>mdi-export</v-icon>
+                  {{ tm("collection.buttons.export") }}
+                </v-btn>
+
+                <v-btn
+                  class="ml-2"
+                  color="primary"
+                  variant="tonal"
+                  @click="openImportFilePicker"
+                >
+                  <v-icon>mdi-import</v-icon>
+                  {{ tm("collection.buttons.import") }}
                 </v-btn>
 
                 <v-btn
@@ -2165,6 +2418,158 @@ watch(isListView, (newVal) => {
       </div>
     </v-col>
   </v-row>
+
+  <input
+    ref="collectionFileInput"
+    type="file"
+    accept="application/json,.json"
+    style="display: none"
+    @change="onCollectionFileSelected"
+  />
+
+  <v-dialog v-model="collectionExportDialog.show" max-width="560">
+    <v-card>
+      <v-card-title class="text-h5 d-flex align-center">
+        <v-icon class="mr-2">mdi-export</v-icon>
+        {{ tm("collection.dialogs.export.title") }}
+      </v-card-title>
+      <v-card-text>
+        <v-text-field
+          v-model="collectionExportDialog.name"
+          :label="tm('collection.fields.name')"
+          variant="outlined"
+          density="comfortable"
+          required
+        ></v-text-field>
+        <v-text-field
+          v-model="collectionExportDialog.description"
+          :label="tm('collection.fields.description')"
+          variant="outlined"
+          density="comfortable"
+        ></v-text-field>
+        <v-switch
+          v-model="collectionExportDialog.includeConfigs"
+          :label="tm('collection.fields.includeConfigs')"
+          hide-details
+          density="comfortable"
+        ></v-switch>
+        <v-switch
+          v-model="collectionExportDialog.includePriority"
+          :label="tm('collection.fields.includePriority')"
+          hide-details
+          density="comfortable"
+        ></v-switch>
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer></v-spacer>
+        <v-btn variant="text" @click="collectionExportDialog.show = false">{{
+          tm("buttons.cancel")
+        }}</v-btn>
+        <v-btn
+          color="primary"
+          variant="flat"
+          :loading="collectionExportDialog.loading"
+          @click="exportCollection"
+        >
+          {{ tm("collection.buttons.export") }}
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <v-dialog v-model="collectionImport.showConfirm" max-width="640">
+    <v-card>
+      <v-card-title class="text-h5 d-flex align-center">
+        <v-icon class="mr-2">mdi-import</v-icon>
+        {{ tm("collection.dialogs.import.title") }}
+      </v-card-title>
+      <v-card-text>
+        <div class="mb-2">
+          <div class="text-subtitle-1 font-weight-medium">
+            {{ collectionImport.validatedCollection?.name || tm('collection.fields.unnamed') }}
+          </div>
+          <div class="text-body-2 text-medium-emphasis" v-if="collectionImport.validatedCollection?.description">
+            {{ collectionImport.validatedCollection.description }}
+          </div>
+          <div class="text-caption text-medium-emphasis mt-1">
+            {{ tm('collection.labels.pluginCount', { count: getCollectionPluginCount(collectionImport.validatedCollection) }) }}
+          </div>
+        </div>
+
+        <v-select
+          v-model="collectionImport.mode"
+          :items="[
+            { title: tm('collection.importModes.add'), value: 'add' },
+            { title: tm('collection.importModes.clean'), value: 'clean' },
+          ]"
+          :label="tm('collection.fields.importMode')"
+          variant="outlined"
+          density="comfortable"
+        ></v-select>
+
+        <v-switch
+          v-model="collectionImport.applyConfigs"
+          :label="tm('collection.fields.applyConfigs')"
+          hide-details
+          density="comfortable"
+        ></v-switch>
+
+        <v-switch
+          v-model="collectionImport.overwriteExistingConfigs"
+          :disabled="!collectionImport.applyConfigs"
+          :label="tm('collection.fields.overwriteExistingConfigs')"
+          hide-details
+          density="comfortable"
+        ></v-switch>
+
+        <v-switch
+          v-model="collectionImport.applyPriority"
+          :label="tm('collection.fields.applyPriority')"
+          hide-details
+          density="comfortable"
+        ></v-switch>
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer></v-spacer>
+        <v-btn variant="text" @click="collectionImport.showConfirm = false">{{
+          tm("buttons.cancel")
+        }}</v-btn>
+        <v-btn
+          color="primary"
+          variant="flat"
+          :loading="collectionImport.importing"
+          @click="confirmImportCollection"
+        >
+          {{ tm('collection.buttons.confirmImport') }}
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <v-dialog v-model="collectionImport.showResult" max-width="720">
+    <v-card>
+      <v-card-title class="text-h5 d-flex align-center">
+        <v-icon class="mr-2">mdi-check-circle-outline</v-icon>
+        {{ tm('collection.dialogs.result.title') }}
+      </v-card-title>
+      <v-card-text>
+        <div v-if="collectionImport.result" style="white-space: pre-wrap">
+          <div>{{ tm('collection.result.installed', { count: collectionImport.result.installed ?? 0 }) }}</div>
+          <div>{{ tm('collection.result.failed', { count: collectionImport.result.failed ?? 0 }) }}</div>
+          <div>{{ tm('collection.result.skipped', { count: collectionImport.result.skipped ?? 0 }) }}</div>
+          <div>{{ tm('collection.result.uninstalled', { count: collectionImport.result.uninstalled ?? 0 }) }}</div>
+          <div>{{ tm('collection.result.configsApplied', { count: collectionImport.result.configs_applied ?? 0 }) }}</div>
+          <div>{{ tm('collection.result.priorityApplied', { count: collectionImport.result.priority_applied ?? 0 }) }}</div>
+        </div>
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer></v-spacer>
+        <v-btn variant="text" @click="collectionImport.showResult = false">{{
+          tm('buttons.close')
+        }}</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
 
   <!-- 配置对话框 -->
   <v-dialog v-model="configDialog" max-width="900">
