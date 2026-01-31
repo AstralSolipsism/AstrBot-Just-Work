@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from astrbot.core import logger, sp
 from astrbot.core.star.star_handler import star_handlers_registry
+
+
+@dataclass(slots=True)
+class PriorityApplyResult:
+    persisted: bool
+    applied_in_memory: bool
 
 
 class PriorityCompatibility:
@@ -29,14 +36,16 @@ class PriorityCompatibility:
         return overrides
 
     @staticmethod
-    async def apply_priority_overrides(overrides: dict[str, int]) -> bool:
+    async def apply_priority_overrides(
+        overrides: dict[str, int],
+    ) -> PriorityApplyResult:
         normalized: dict[str, int] = {
             str(k): int(v) for k, v in (overrides or {}).items()
         }
 
         try:
             await sp.global_put("handler_priority_overrides", normalized)
-            return True
+            return PriorityApplyResult(persisted=True, applied_in_memory=False)
         except Exception as e:
             logger.debug(f"Failed to write handler_priority_overrides to sp: {e!s}")
 
@@ -46,23 +55,33 @@ class PriorityCompatibility:
                 continue
             handler.extras_configs["priority"] = int(priority)
 
+        # Best-effort compatibility: star_handlers_registry internals may change upstream.
         try:
-            star_handlers_registry._handlers.sort(
-                key=lambda h: -int(h.extras_configs.get("priority", 0) or 0),
-            )
+            handlers = getattr(star_handlers_registry, "_handlers", None)
+            if isinstance(handlers, list):
+                handlers.sort(
+                    key=lambda h: -int(h.extras_configs.get("priority", 0) or 0),
+                )
         except Exception as e:
-            logger.warning(f"Failed to sort handler registry after overrides: {e!s}")
-            return False
+            logger.debug(
+                f"Failed to sort handler registry after overrides (best effort): {e!s}"
+            )
 
-        return True
+        return PriorityApplyResult(persisted=False, applied_in_memory=True)
 
     @staticmethod
     async def is_pr4716_available() -> bool:
         try:
             await sp.global_get("handler_priority_overrides", {})
-            return True
         except Exception:
             return False
+
+        try:
+            _ = star_handlers_registry.star_handlers_map
+        except Exception:
+            return False
+
+        return True
 
 
 class ConflictDetectionCompatibility:

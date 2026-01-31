@@ -47,7 +47,7 @@ class CollectionExporter:
                 CollectionPlugin(
                     name=str(plugin.name),
                     repo=plugin.repo,
-                    version=plugin.version or "",
+                    exported_version=plugin.version or "",
                     display_name=plugin.display_name,
                 ),
             )

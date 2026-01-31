@@ -23,14 +23,14 @@ class CollectionValidationError(ValueError):
 class CollectionPlugin:
     name: str
     repo: str
-    version: str
+    exported_version: str
     display_name: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
             "name": self.name,
             "repo": self.repo,
-            "version": self.version,
+            "exported_version": self.exported_version,
         }
         if self.display_name is not None:
             data["display_name"] = self.display_name
@@ -38,10 +38,14 @@ class CollectionPlugin:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CollectionPlugin:
+        exported_version = data.get("exported_version")
+        if exported_version is None:
+            # Backward compatibility for schema 1.0 payloads.
+            exported_version = data.get("version", "")
         return cls(
             name=str(data.get("name", "")),
             repo=str(data.get("repo", "")),
-            version=str(data.get("version", "")),
+            exported_version=str(exported_version or ""),
             display_name=(
                 str(data["display_name"])
                 if data.get("display_name") is not None
@@ -127,12 +131,12 @@ class PluginCollection:
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "required": ["name", "repo", "version"],
+                    "required": ["name", "repo", "exported_version"],
                     "additionalProperties": False,
                     "properties": {
                         "name": {"type": "string"},
                         "repo": {"type": "string"},
-                        "version": {"type": "string"},
+                        "exported_version": {"type": "string"},
                         "display_name": {"type": ["string", "null"]},
                     },
                 },

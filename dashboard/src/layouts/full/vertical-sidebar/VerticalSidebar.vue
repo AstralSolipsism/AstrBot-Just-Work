@@ -32,6 +32,8 @@ onMounted(() => {
   
   window.addEventListener('storage', handleStorageChange);
   window.addEventListener('sidebar-customization-changed', handleCustomEvent);
+
+  fetchStarCount();
 });
 
 onUnmounted(() => {
@@ -214,6 +216,7 @@ function formatNumber(num) {
 }
 
 async function fetchStarCount() {
+  if (import.meta.env.DEV) return;
   try {
     const response = await fetch('https://cloud.astrbot.app/api/v1/github/repo-info');
     const data = await response.json();
@@ -225,8 +228,6 @@ async function fetchStarCount() {
     console.debug('Failed to fetch star count:', error);
   }
 }
-
-fetchStarCount();
 
 // 打开更新日志对话框
 function openChangelogDialog() {

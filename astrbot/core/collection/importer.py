@@ -31,7 +31,7 @@ class CollectionImporter:
                     {
                         "name": p.name,
                         "repo": p.repo,
-                        "version": p.version,
+                        "exported_version": p.exported_version,
                         "status": "not_installed",
                     },
                 )
@@ -73,6 +73,7 @@ class CollectionImporter:
         )
 
         uninstalled: list[dict[str, Any]] = []
+        uninstall_failed: list[str] = []
         if options.import_mode == "clean":
             keep = {p.name for p in collection.plugins}
             for p in list(self.plugin_manager.context.get_all_stars()):
@@ -87,6 +88,7 @@ class CollectionImporter:
                     uninstalled.append({"name": p.name, "status": "ok"})
                 except Exception as e:
                     logger.error(f"Uninstall plugin failed ({p.name}): {e!s}")
+                    uninstall_failed.append(p.name)
                     uninstalled.append(
                         {"name": p.name, "status": "error", "message": str(e)}
                     )
@@ -101,7 +103,14 @@ class CollectionImporter:
             async with sem:
                 try:
                     await self.plugin_manager.install_plugin(repo, options.proxy)
-                    return {"name": name, "status": "ok", "message": "installed"}
+                    return {
+                        "name": name,
+                        "status": "ok",
+                        "message": "installed",
+                        "exported_version_note": (
+                            "Recorded for reference only; collection import does not lock plugin version."
+                        ),
+                    }
                 except Exception as e:
                     return {"name": name, "status": "error", "message": str(e)}
 
@@ -126,6 +135,9 @@ class CollectionImporter:
                 failed_results.append(r)
 
         configs_applied = 0
+        configs_failed: list[dict[str, str]] = []
+        reload_queue: list[str] = []
+        reload_failed: list[dict[str, Any]] = []
         if options.apply_configs and isinstance(collection.plugin_configs, dict):
             for plugin_name, cfg in collection.plugin_configs.items():
                 if not isinstance(cfg, dict):
@@ -154,26 +166,48 @@ class CollectionImporter:
                 try:
                     md.config.save_config(merged_cfg)
                     configs_applied += 1
-                    await self.plugin_manager.reload(plugin_name)
+                    if plugin_name not in reload_queue:
+                        reload_queue.append(plugin_name)
                 except Exception as e:
                     logger.error(f"Apply config failed ({plugin_name}): {e!s}")
+                    configs_failed.append({"name": plugin_name, "message": str(e)})
 
-        priority_applied = False
+        for plugin_name in reload_queue:
+            try:
+                await self.plugin_manager.reload(plugin_name)
+            except Exception as e:
+                logger.error(f"Reload plugin failed ({plugin_name}): {e!s}")
+                reload_failed.append({"name": plugin_name, "message": str(e)})
+
+        priority_persisted = False
+        priority_applied_in_memory = False
+        priority_note = ""
         if options.apply_priority and isinstance(
             collection.handler_priority_overrides, dict
         ):
-            priority_applied = await PriorityCompatibility.apply_priority_overrides(
+            apply_result = await PriorityCompatibility.apply_priority_overrides(
                 collection.handler_priority_overrides,
             )
+            priority_persisted = apply_result.persisted
+            priority_applied_in_memory = apply_result.applied_in_memory
+            if priority_applied_in_memory and not priority_persisted:
+                priority_note = "Priority overrides could not be persisted; applied in memory only for this process."
 
         result: dict[str, Any] = {
             "installed": installed_results,
             "failed": failed_results,
             "skipped": skipped_results,
             "uninstalled": uninstalled,
+            "uninstall_failed": uninstall_failed,
             "configs_applied": configs_applied,
-            "priority_applied": priority_applied,
+            "configs_failed": configs_failed,
+            "reloaded": reload_queue,
+            "reload_failed": reload_failed,
+            "priority_persisted": priority_persisted,
+            "priority_applied_in_memory": priority_applied_in_memory,
         }
+        if priority_note:
+            result["priority_note"] = priority_note
         if conflict_report is not None:
             result["conflicts"] = conflict_report
 
