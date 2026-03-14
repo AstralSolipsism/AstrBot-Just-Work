@@ -173,6 +173,34 @@
                   prepend-inner-icon="mdi-account"
                 />
 
+                <v-select
+                  v-model="agent.dispatch_mode"
+                  :label="tm('form.dispatchModeLabel')"
+                  :items="dispatchModeOptions"
+                  item-title="title"
+                  item-value="value"
+                  variant="outlined"
+                  density="comfortable"
+                  hide-details="auto"
+                  prepend-inner-icon="mdi-source-branch"
+                />
+
+                <v-select
+                  v-model="agent.allowed_children"
+                  :label="tm('form.allowedChildrenLabel')"
+                  :items="getAllowedChildrenOptions(agent.__key)"
+                  item-title="title"
+                  item-value="value"
+                  variant="outlined"
+                  density="comfortable"
+                  hide-details="auto"
+                  prepend-inner-icon="mdi-account-multiple"
+                  multiple
+                  chips
+                  closable-chips
+                  clearable
+                />
+
                 <div class="d-flex flex-column gap-1">
                   <div class="text-caption text-medium-emphasis ml-1">{{ tm('form.providerLabel') }}</div>
                   <v-card variant="outlined" class="pa-0 border-thin rounded bg-transparent" style="border-color: rgba(var(--v-border-color), var(--v-border-opacity));">
@@ -255,14 +283,17 @@ import PersonaSelector from '@/components/shared/PersonaSelector.vue'
 import PersonaQuickPreview from '@/components/shared/PersonaQuickPreview.vue'
 import { useModuleI18n } from '@/i18n/composables'
 
-type SubAgentItem = {
+type DispatchMode = 'free' | 'sync' | 'async'
 
+type SubAgentItem = {
   __key: string
   name: string
   persona_id: string
   public_description: string
   enabled: boolean
   provider_id?: string
+  allowed_children: string[]
+  dispatch_mode: DispatchMode
 }
 
 type SubAgentConfig = {
@@ -296,6 +327,52 @@ const mainStateDescription = computed(() =>
   cfg.value.main_enable ? tm('description.enabled') : tm('description.disabled')
 )
 
+const dispatchModeOptions = computed(() => [
+  { title: tm('form.dispatchModeOptions.free'), value: 'free' satisfies DispatchMode },
+  { title: tm('form.dispatchModeOptions.sync'), value: 'sync' satisfies DispatchMode },
+  { title: tm('form.dispatchModeOptions.async'), value: 'async' satisfies DispatchMode }
+])
+
+function normalizeDispatchMode(value: unknown): DispatchMode {
+  const normalizedValue = String(value ?? 'free').trim().toLowerCase()
+  if (normalizedValue === 'sync' || normalizedValue === 'async') {
+    return normalizedValue
+  }
+  return 'free'
+}
+
+function normalizeAllowedChildren(value: unknown, selfName = ''): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  const selfNameTrimmed = selfName.trim()
+  const seen = new Set<string>()
+
+  return value
+    .map((item) => String(item ?? '').trim())
+    .filter((item) => {
+      if (!item || item === selfNameTrimmed || seen.has(item)) {
+        return false
+      }
+      seen.add(item)
+      return true
+    })
+}
+
+function getAllowedChildrenOptions(currentKey: string) {
+  return cfg.value.agents
+    .filter((candidate) => candidate.__key !== currentKey)
+    .map((candidate) => {
+      const candidateName = candidate.name.trim()
+      return {
+        title: candidateName || tm('cards.unnamed'),
+        value: candidateName
+      }
+    })
+    .filter((candidate) => !!candidate.value)
+}
+
 function normalizeConfig(raw: any): SubAgentConfig {
   const main_enable = !!raw?.main_enable
   const remove_main_duplicate_tools = !!raw?.remove_main_duplicate_tools
@@ -307,6 +384,8 @@ function normalizeConfig(raw: any): SubAgentConfig {
     const public_description = (a?.public_description ?? '').toString()
     const enabled = a?.enabled !== false
     const provider_id = (a?.provider_id ?? undefined) as string | undefined
+    const dispatch_mode = normalizeDispatchMode(a?.dispatch_mode)
+    const allowed_children = normalizeAllowedChildren(a?.allowed_children, name)
 
     return {
       __key: `${Date.now()}_${i}_${Math.random().toString(16).slice(2)}`,
@@ -314,7 +393,9 @@ function normalizeConfig(raw: any): SubAgentConfig {
       persona_id,
       public_description,
       enabled,
-      provider_id
+      provider_id,
+      allowed_children,
+      dispatch_mode
     }
   })
 
@@ -344,7 +425,9 @@ function addAgent() {
     persona_id: '',
     public_description: '',
     enabled: true,
-    provider_id: undefined
+    provider_id: undefined,
+    allowed_children: [],
+    dispatch_mode: 'free'
   })
 }
 
@@ -354,7 +437,8 @@ function removeAgent(idx: number) {
 
 function validateBeforeSave(): boolean {
   const nameRe = /^[a-z][a-z0-9_]{0,63}$/
-  const seen = new Set<string>()
+  const validAgentNames = new Set<string>()
+
   for (const a of cfg.value.agents) {
     const name = (a.name || '').trim()
     if (!name) {
@@ -365,16 +449,25 @@ function validateBeforeSave(): boolean {
       toast(tm('messages.nameInvalid'), 'warning')
       return false
     }
-    if (seen.has(name)) {
+    if (validAgentNames.has(name)) {
       toast(tm('messages.nameDuplicate', { name }), 'warning')
       return false
     }
-    seen.add(name)
+    validAgentNames.add(name)
     if (!a.persona_id) {
       toast(tm('messages.personaMissing', { name }), 'warning')
       return false
     }
   }
+
+  for (const a of cfg.value.agents) {
+    const name = (a.name || '').trim()
+    a.name = name
+    a.dispatch_mode = normalizeDispatchMode(a.dispatch_mode)
+    a.allowed_children = normalizeAllowedChildren(a.allowed_children, name)
+      .filter((childName) => validAgentNames.has(childName))
+  }
+
   return true
 }
 
@@ -386,11 +479,13 @@ async function save() {
       main_enable: cfg.value.main_enable,
       remove_main_duplicate_tools: cfg.value.remove_main_duplicate_tools,
       agents: cfg.value.agents.map((a) => ({
-        name: a.name,
+        name: a.name.trim(),
         persona_id: a.persona_id,
         public_description: a.public_description,
         enabled: a.enabled,
-        provider_id: a.provider_id
+        provider_id: a.provider_id,
+        allowed_children: normalizeAllowedChildren(a.allowed_children, a.name),
+        dispatch_mode: normalizeDispatchMode(a.dispatch_mode)
       }))
     }
 

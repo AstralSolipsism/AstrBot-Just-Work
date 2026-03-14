@@ -33,7 +33,8 @@
     "switchLabel": "Enable",
     "previewTitle": "Preview: handoff tool shown to the main LLM",
     "personaChip": "Persona: {id}",
-    "personaPreview": "PERSONA PREVIEW"
+    "personaPreview": "PERSONA PREVIEW",
+    "noDescription": "No description"
   },
   "form": {
     "nameLabel": "Agent name (used for transfer_to_{name})",
@@ -43,7 +44,14 @@
     "personaLabel": "Choose Persona",
     "personaHint": "The SubAgent inherits the selected Persona's system settings and tools.",
     "descriptionLabel": "Description for the main LLM (used to decide handoff)",
-    "descriptionHint": "Shown to the main LLM as the transfer_to_* tool description—keep it short and clear."
+    "descriptionHint": "Shown to the main LLM as the transfer_to_* tool description—keep it short and clear.",
+    "dispatchModeLabel": "Dispatch mode",
+    "allowedChildrenLabel": "Authorized child agents",
+    "dispatchModeOptions": {
+      "free": "Free mode (default)",
+      "sync": "Force sync",
+      "async": "Force async"
+    }
   },
   "messages": {
     "loadConfigFailed": "Failed to load config",

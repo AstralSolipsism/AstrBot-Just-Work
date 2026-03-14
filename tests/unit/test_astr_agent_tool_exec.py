@@ -1,9 +1,13 @@
 from types import SimpleNamespace
+from typing import Any, cast
 
 import mcp
 import pytest
 
+from astrbot.core.agent.agent import Agent
+from astrbot.core.agent.handoff import HandoffTool
 from astrbot.core.agent.run_context import ContextWrapper
+from astrbot.core.agent.tool import FunctionTool
 from astrbot.core.astr_agent_tool_exec import FunctionToolExecutor
 from astrbot.core.message.components import Image
 
@@ -17,16 +21,44 @@ class _DummyEvent:
         return None
 
 
-class _DummyTool:
+class _DummyRegisteredTool(FunctionTool):
     def __init__(self) -> None:
-        self.name = "transfer_to_subagent"
-        self.agent = SimpleNamespace(name="subagent")
+        super().__init__(
+            name="main_tool",
+            description="main",
+            parameters={"type": "object", "properties": {}},
+        )
 
 
-def _build_run_context(message_components: list[object] | None = None):
+def _make_agent(name: str, *, tools=None, instructions: str = "") -> Agent[Any]:
+    agent = Agent[Any](name=name, instructions=instructions, tools=tools or [])
+    agent.begin_dialogs = []
+    return agent
+
+
+def _make_handoff(
+    name: str, *, tools=None, dispatch_mode: str = "free"
+) -> HandoffTool[Any]:
+    handoff = HandoffTool(
+        agent=_make_agent(name, tools=tools, instructions=f"{name}-instructions")
+    )
+    handoff.dispatch_mode = dispatch_mode
+    return handoff
+
+
+def _build_run_context(
+    message_components: list[object] | None = None,
+    *,
+    context_override=None,
+):
     event = _DummyEvent(message_components=message_components)
-    ctx = SimpleNamespace(event=event, context=SimpleNamespace())
-    return ContextWrapper(context=ctx)
+    if context_override is None:
+        context_override = SimpleNamespace(
+            subagent_orchestrator=None,
+            get_config=lambda **_kwargs: {"provider_settings": {}},
+        )
+    ctx = SimpleNamespace(event=event, context=context_override)
+    return ContextWrapper(context=ctx, messages=[], tool_call_timeout=60)
 
 
 @pytest.mark.asyncio
@@ -161,7 +193,7 @@ async def test_do_handoff_background_reports_prepared_image_urls(
 
     run_context = _build_run_context()
     await FunctionToolExecutor._do_handoff_background(
-        tool=_DummyTool(),
+        tool=_make_handoff("subagent"),
         run_context=run_context,
         task_id="task-id",
         input="hello",
@@ -188,23 +220,18 @@ async def test_execute_handoff_skips_renormalize_when_image_urls_prepared(
         return SimpleNamespace(completion_text="ok")
 
     context = SimpleNamespace(
+        subagent_orchestrator=None,
         get_current_chat_provider_id=_fake_get_current_chat_provider_id,
         tool_loop_agent=_fake_tool_loop_agent,
         get_config=lambda **_kwargs: {"provider_settings": {}},
     )
     event = _DummyEvent([])
-    run_context = ContextWrapper(context=SimpleNamespace(event=event, context=context))
-    tool = SimpleNamespace(
-        name="transfer_to_subagent",
-        provider_id=None,
-        agent=SimpleNamespace(
-            name="subagent",
-            tools=[],
-            instructions="subagent-instructions",
-            begin_dialogs=[],
-            run_hooks=None,
-        ),
+    run_context = ContextWrapper(
+        context=SimpleNamespace(event=event, context=context),
+        messages=[],
+        tool_call_timeout=60,
     )
+    tool = _make_handoff("subagent", tools=[])
 
     monkeypatch.setattr(
         "astrbot.core.astr_agent_tool_exec.normalize_and_dedupe_strings", _boom
@@ -294,3 +321,66 @@ async def test_collect_handoff_image_urls_filters_extensionless_file_outside_tem
     )
 
     assert image_urls == []
+
+
+@pytest.mark.parametrize(
+    ("dispatch_mode", "requested", "expected"),
+    [
+        ("sync", True, False),
+        ("sync", False, False),
+        ("async", True, True),
+        ("async", False, True),
+        ("free", True, True),
+        ("free", False, False),
+    ],
+)
+def test_resolve_handoff_background_task(
+    dispatch_mode: str, requested: bool, expected: bool
+):
+    tool = cast(HandoffTool[Any], SimpleNamespace(dispatch_mode=dispatch_mode))
+    assert (
+        FunctionToolExecutor._resolve_handoff_background_task(tool, requested)
+        is expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_handoff_toolset_appends_authorized_child_handoffs(monkeypatch):
+    main_tool = _DummyRegisteredTool()
+    main_tool.active = True
+
+    child_tool = _make_handoff("child")
+
+    monkeypatch.setattr(
+        "astrbot.core.astr_agent_tool_exec.llm_tools",
+        SimpleNamespace(
+            func_list=[main_tool],
+            get_func=lambda name: main_tool if name == "main_tool" else None,
+        ),
+    )
+
+    orchestrator = SimpleNamespace(
+        get_authorized_child_handoffs=lambda parent_name: (
+            [child_tool] if parent_name == "parent" else []
+        )
+    )
+    context = SimpleNamespace(
+        subagent_orchestrator=orchestrator,
+        get_config=lambda **_kwargs: {
+            "provider_settings": {"computer_use_runtime": "none"}
+        },
+    )
+    run_context = _build_run_context(context_override=context)
+    current_handoff = _make_handoff("parent")
+
+    toolset = FunctionToolExecutor._build_handoff_toolset(
+        run_context,
+        ["main_tool"],
+        current_handoff=current_handoff,
+    )
+
+    assert toolset is not None
+    assert sorted(tool.name for tool in toolset.tools) == [
+        "main_tool",
+        "transfer_to_child",
+    ]

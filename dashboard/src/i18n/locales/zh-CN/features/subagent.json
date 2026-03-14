@@ -44,7 +44,14 @@
     "personaHint": "SubAgent 将直接继承所选 Persona 的系统设定与工具。在人格设定页管理和新建人格。",
     "personaPreview": "人格预览",
     "descriptionLabel": "对主 LLM 的描述（用于决定是否 handoff）",
-    "descriptionHint": "这段会作为 transfer_to_* 工具的描述给主 LLM 看，建议简短明确。"
+    "descriptionHint": "这段会作为 transfer_to_* 工具的描述给主 LLM 看，建议简短明确。",
+    "dispatchModeLabel": "调用模式",
+    "allowedChildrenLabel": "下级被授权代理",
+    "dispatchModeOptions": {
+      "free": "自由模式（默认）",
+      "sync": "强制同步",
+      "async": "强制异步"
+    }
   },
   "messages": {
     "loadConfigFailed": "获取配置失败",

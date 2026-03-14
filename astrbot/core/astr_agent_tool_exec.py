@@ -118,6 +118,44 @@ class FunctionToolExecutor(BaseFunctionToolExecutor[AstrAgentContext]):
         return sanitized
 
     @classmethod
+    def _resolve_handoff_background_task(
+        cls, tool: HandoffTool, requested_background_task: T.Any
+    ) -> bool:
+        dispatch_mode = str(getattr(tool, "dispatch_mode", "free") or "free").lower()
+        if dispatch_mode == "sync":
+            return False
+        if dispatch_mode == "async":
+            return True
+        return bool(requested_background_task)
+
+    @classmethod
+    def _get_subagent_orchestrator(cls, run_context: ContextWrapper[AstrAgentContext]):
+        return getattr(run_context.context.context, "subagent_orchestrator", None)
+
+    @classmethod
+    def _get_handoff_children(
+        cls,
+        run_context: ContextWrapper[AstrAgentContext],
+        parent_name: str | None,
+    ) -> list[HandoffTool]:
+        orchestrator = cls._get_subagent_orchestrator(run_context)
+        if orchestrator is None:
+            return []
+        getter = getattr(orchestrator, "get_authorized_child_handoffs", None)
+        if getter is None:
+            return []
+        try:
+            handoffs = getter(parent_name)
+        except Exception:
+            logger.error(
+                "Failed to resolve child handoffs for parent %s.",
+                parent_name,
+                exc_info=True,
+            )
+            return []
+        return [handoff for handoff in handoffs if isinstance(handoff, HandoffTool)]
+
+    @classmethod
     async def execute(cls, tool, run_context, **tool_args):
         """执行函数调用。
 
@@ -130,7 +168,10 @@ class FunctionToolExecutor(BaseFunctionToolExecutor[AstrAgentContext]):
 
         """
         if isinstance(tool, HandoffTool):
-            is_bg = tool_args.pop("background_task", False)
+            requested_background_task = tool_args.pop("background_task", False)
+            is_bg = cls._resolve_handoff_background_task(
+                tool, requested_background_task
+            )
             if is_bg:
                 async for r in cls._execute_handoff_background(
                     tool, run_context, **tool_args
@@ -197,6 +238,7 @@ class FunctionToolExecutor(BaseFunctionToolExecutor[AstrAgentContext]):
         cls,
         run_context: ContextWrapper[AstrAgentContext],
         tools: list[str | FunctionTool] | None,
+        current_handoff: HandoffTool | None = None,
     ) -> ToolSet | None:
         ctx = run_context.context.context
         event = run_context.context.event
@@ -204,6 +246,19 @@ class FunctionToolExecutor(BaseFunctionToolExecutor[AstrAgentContext]):
         provider_settings = cfg.get("provider_settings", {})
         runtime = str(provider_settings.get("computer_use_runtime", "local"))
         runtime_computer_tools = cls._get_runtime_computer_tools(runtime)
+        parent_name = None
+        if current_handoff is not None:
+            parent_agent = getattr(current_handoff, "agent", None)
+            parent_name = getattr(parent_agent, "name", None)
+        child_handoffs = cls._get_handoff_children(
+            run_context,
+            parent_name,
+        )
+
+        def _append_child_handoffs(toolset: ToolSet) -> ToolSet:
+            for child_handoff in child_handoffs:
+                toolset.add_tool(child_handoff)
+            return toolset
 
         # Keep persona semantics aligned with the main agent: tools=None means
         # "all tools", including runtime computer-use tools.
@@ -216,23 +271,23 @@ class FunctionToolExecutor(BaseFunctionToolExecutor[AstrAgentContext]):
                     toolset.add_tool(registered_tool)
             for runtime_tool in runtime_computer_tools.values():
                 toolset.add_tool(runtime_tool)
+            toolset = _append_child_handoffs(toolset)
             return None if toolset.empty() else toolset
 
-        if not tools:
-            return None
-
         toolset = ToolSet()
-        for tool_name_or_obj in tools:
-            if isinstance(tool_name_or_obj, str):
-                registered_tool = llm_tools.get_func(tool_name_or_obj)
-                if registered_tool and registered_tool.active:
-                    toolset.add_tool(registered_tool)
-                    continue
-                runtime_tool = runtime_computer_tools.get(tool_name_or_obj)
-                if runtime_tool:
-                    toolset.add_tool(runtime_tool)
-            elif isinstance(tool_name_or_obj, FunctionTool):
-                toolset.add_tool(tool_name_or_obj)
+        if tools:
+            for tool_name_or_obj in tools:
+                if isinstance(tool_name_or_obj, str):
+                    registered_tool = llm_tools.get_func(tool_name_or_obj)
+                    if registered_tool and registered_tool.active:
+                        toolset.add_tool(registered_tool)
+                        continue
+                    runtime_tool = runtime_computer_tools.get(tool_name_or_obj)
+                    if runtime_tool:
+                        toolset.add_tool(runtime_tool)
+                elif isinstance(tool_name_or_obj, FunctionTool):
+                    toolset.add_tool(tool_name_or_obj)
+        toolset = _append_child_handoffs(toolset)
         return None if toolset.empty() else toolset
 
     @classmethod
@@ -264,7 +319,11 @@ class FunctionToolExecutor(BaseFunctionToolExecutor[AstrAgentContext]):
         tool_args["image_urls"] = image_urls
 
         # Build handoff toolset from registered tools plus runtime computer tools.
-        toolset = cls._build_handoff_toolset(run_context, tool.agent.tools)
+        toolset = cls._build_handoff_toolset(
+            run_context,
+            tool.agent.tools,
+            current_handoff=tool,
+        )
 
         ctx = run_context.context.context
         event = run_context.context.event
@@ -374,7 +433,7 @@ class FunctionToolExecutor(BaseFunctionToolExecutor[AstrAgentContext]):
                 image_urls_prepared=True,
                 **tool_args,
             ):
-                if isinstance(r, mcp.types.CallToolResult):
+                if isinstance(r, mcp.types.CallToolResult) and r.content:
                     for content in r.content:
                         if isinstance(content, mcp.types.TextContent):
                             result_text += content.text + "\n"

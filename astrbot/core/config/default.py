@@ -148,6 +148,10 @@ DEFAULT_CONFIG = {
     # - main_enable = True: enabled; main LLM keeps its own tools and includes handoff
     #   tools (transfer_to_*). remove_main_duplicate_tools can remove tools that are
     #   duplicated on subagents from the main LLM toolset.
+    # - agents[*].allowed_children: a list of child subagent names that the current
+    #   subagent is allowed to dispatch to. Empty means no child handoffs.
+    # - agents[*].dispatch_mode: handoff execution policy. sync=always foreground,
+    #   async=always background, free=LLM may choose via background_task.
     "subagent_orchestrator": {
         "main_enable": False,
         "remove_main_duplicate_tools": False,

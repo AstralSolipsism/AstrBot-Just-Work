@@ -8,6 +8,11 @@ from .tool import FunctionTool
 class HandoffTool(FunctionTool, Generic[TContext]):
     """Handoff tool for delegating tasks to another agent."""
 
+    provider_id: str | None
+    dispatch_mode: str
+    allowed_children: list[str]
+    parent_name: str | None
+
     def __init__(
         self,
         agent: Agent[TContext],
@@ -15,25 +20,24 @@ class HandoffTool(FunctionTool, Generic[TContext]):
         tool_description: str | None = None,
         **kwargs,
     ) -> None:
+        del kwargs
 
-        # Avoid passing duplicate `description` to the FunctionTool dataclass.
-        # Some call sites (e.g. SubAgentOrchestrator) pass `description` via kwargs
-        # to override what the main agent sees, while we also compute a default
-        # description here.
-        # `tool_description` is the public description shown to the main LLM.
-        # Keep a separate kwarg to avoid conflicting with FunctionTool's `description`.
+        # `tool_description` is the public description shown to the caller LLM.
         description = tool_description or self.default_description(agent.name)
+
         super().__init__(
             name=f"transfer_to_{agent.name}",
-            parameters=parameters or self.default_parameters(),
             description=description,
-            **kwargs,
+            parameters=parameters or self.default_parameters(),
         )
 
         # Optional provider override for this subagent. When set, the handoff
         # execution will use this chat provider id instead of the global/default.
-        self.provider_id: str | None = None
-        # Note: Must assign after super().__init__() to prevent parent class from overriding this attribute
+        self.provider_id = None
+        self.dispatch_mode = "free"
+        self.allowed_children = []
+        self.parent_name = None
+        # Note: Must assign after initialization to avoid parent class overrides.
         self.agent = agent
 
     def default_parameters(self) -> dict:
@@ -52,9 +56,10 @@ class HandoffTool(FunctionTool, Generic[TContext]):
                 "background_task": {
                     "type": "boolean",
                     "description": (
-                        "Defaults to false. "
-                        "Set to true if the task may take noticeable time, involves external tools, or the user does not need to wait. "
-                        "Use false only for quick, immediate tasks."
+                        "Whether the handoff should run in background. "
+                        "If the target handoff dispatch_mode is sync, this value is always forced to false. "
+                        "If dispatch_mode is async, this value is always forced to true. "
+                        "Only when dispatch_mode is free can the model choose true or false."
                     ),
                 },
             },
@@ -62,4 +67,4 @@ class HandoffTool(FunctionTool, Generic[TContext]):
 
     def default_description(self, agent_name: str | None) -> str:
         agent_name = agent_name or "another"
-        return f"Delegate tasks to {self.name} agent to handle the request."
+        return f"Delegate tasks to {agent_name} agent to handle the request."

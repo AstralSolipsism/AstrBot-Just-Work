@@ -26,39 +26,54 @@ class SubAgentRoute(Route):
         ]
         self.register_routes()
 
+    def _normalize_agent_config(self, agent: dict) -> dict:
+        normalized = dict(agent)
+        normalized.setdefault("provider_id", None)
+        normalized.setdefault("persona_id", None)
+        normalized.setdefault("allowed_children", [])
+        normalized.setdefault("dispatch_mode", "free")
+
+        if not isinstance(normalized.get("allowed_children"), list):
+            normalized["allowed_children"] = []
+        else:
+            normalized["allowed_children"] = [
+                str(item).strip()
+                for item in normalized["allowed_children"]
+                if str(item).strip()
+            ]
+
+        dispatch_mode = str(normalized.get("dispatch_mode") or "free").strip().lower()
+        if dispatch_mode not in {"sync", "async", "free"}:
+            dispatch_mode = "free"
+        normalized["dispatch_mode"] = dispatch_mode
+        return normalized
+
+    def _normalize_subagent_config(self, data) -> dict:
+        if not isinstance(data, dict):
+            data = {}
+
+        normalized = dict(data)
+        if "main_enable" not in normalized and "enable" in normalized:
+            normalized["main_enable"] = bool(normalized.get("enable", False))
+
+        normalized.setdefault("main_enable", False)
+        normalized.setdefault("remove_main_duplicate_tools", False)
+        normalized.setdefault("router_system_prompt", "")
+
+        agents = normalized.get("agents")
+        if not isinstance(agents, list):
+            agents = []
+        normalized["agents"] = [
+            self._normalize_agent_config(agent)
+            for agent in agents
+            if isinstance(agent, dict)
+        ]
+        return normalized
+
     async def get_config(self):
         try:
             cfg = self.core_lifecycle.astrbot_config
-            data = cfg.get("subagent_orchestrator")
-
-            # First-time access: return a sane default instead of erroring.
-            if not isinstance(data, dict):
-                data = {
-                    "main_enable": False,
-                    "remove_main_duplicate_tools": False,
-                    "agents": [],
-                }
-
-            # Backward compatibility: older config used `enable`.
-            if (
-                isinstance(data, dict)
-                and "main_enable" not in data
-                and "enable" in data
-            ):
-                data["main_enable"] = bool(data.get("enable", False))
-
-            # Ensure required keys exist.
-            data.setdefault("main_enable", False)
-            data.setdefault("remove_main_duplicate_tools", False)
-            data.setdefault("agents", [])
-
-            # Backward/forward compatibility: ensure each agent contains provider_id.
-            # None means follow global/default provider settings.
-            if isinstance(data.get("agents"), list):
-                for a in data["agents"]:
-                    if isinstance(a, dict):
-                        a.setdefault("provider_id", None)
-                        a.setdefault("persona_id", None)
+            data = self._normalize_subagent_config(cfg.get("subagent_orchestrator"))
             return jsonify(Response().ok(data=data).__dict__)
         except Exception as e:
             logger.error(traceback.format_exc())
@@ -70,8 +85,9 @@ class SubAgentRoute(Route):
             if not isinstance(data, dict):
                 return jsonify(Response().error("配置必须为 JSON 对象").__dict__)
 
+            normalized = self._normalize_subagent_config(data)
             cfg = self.core_lifecycle.astrbot_config
-            cfg["subagent_orchestrator"] = data
+            cfg["subagent_orchestrator"] = normalized
 
             # Persist to cmd_config.json
             # AstrBotConfigManager does not expose a `save()` method; persist via AstrBotConfig.
@@ -80,7 +96,7 @@ class SubAgentRoute(Route):
             # Reload dynamic handoff tools if orchestrator exists
             orch = getattr(self.core_lifecycle, "subagent_orchestrator", None)
             if orch is not None:
-                await orch.reload_from_config(data)
+                await orch.reload_from_config(normalized)
 
             return jsonify(Response().ok(message="保存成功").__dict__)
         except Exception as e:
